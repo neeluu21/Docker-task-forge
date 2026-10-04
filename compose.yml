@@ -1,0 +1,138 @@
+name: taskforge
+
+services:
+
+  # ==========================================
+  # MongoDB
+  # ==========================================
+  database:
+    image: mongo:8.0
+    restart: unless-stopped
+
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-taskforge}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USERNAME:-taskforge_admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-change_me_before_production}
+
+    volumes:
+      - mongo_data:/data/db
+
+    networks:
+      - taskforge-network
+
+    # Resource limits
+    mem_limit: 512m
+    cpus: 0.75
+    pids_limit: 300
+
+    security_opt:
+      - no-new-privileges:true
+
+    # MongoDB health check
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --eval \"db.adminCommand({ ping: 1 }).ok\" --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin | grep 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+
+  # ==========================================
+  # Node.js Backend
+  # ==========================================
+  backend:
+    image: ${DOCKERHUB_USERNAME:-neelu196}/taskforge-backend:${TASKFORGE_TAG:-v1.0.0}
+
+    build:
+      context: ./backend
+
+    restart: unless-stopped
+
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+
+      MONGO_URI: mongodb://${MONGO_USERNAME:-taskforge_admin}:${MONGO_PASSWORD:-change_me_before_production}@database:27017/${MONGO_DATABASE:-taskforge}?authSource=admin
+
+    depends_on:
+      database:
+        condition: service_healthy
+
+    networks:
+      - taskforge-network
+
+    # Internal only
+    expose:
+      - "5000"
+
+    # Resource limits
+    mem_limit: 256m
+    cpus: 0.50
+    pids_limit: 200
+
+    # Security
+    read_only: true
+
+    tmpfs:
+      - /tmp:noexec,nosuid,size=32m
+
+    cap_drop:
+      - ALL
+
+    security_opt:
+      - no-new-privileges:true
+
+
+  # ==========================================
+  # React + Nginx Frontend
+  # ==========================================
+  frontend:
+    image: ${DOCKERHUB_USERNAME:-neelu196}/taskforge-frontend:${TASKFORGE_TAG:-v1.0.0}
+
+    build:
+      context: ./frontend
+
+    restart: unless-stopped
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    # Public application port
+    ports:
+      - "${APP_PORT:-8080}:8080"
+
+    networks:
+      - taskforge-network
+
+    # Resource limits
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 150
+
+    # Security
+    # Do NOT use cap_drop: ALL here because the Nginx
+    # official entrypoint needs the ability to prepare
+    # its runtime/cache directories during startup.
+    security_opt:
+      - no-new-privileges:true
+
+
+# ==========================================
+# Docker Network
+# ==========================================
+networks:
+  taskforge-network:
+    driver: bridge
+
+
+# ==========================================
+# Persistent MongoDB Volume
+# ==========================================
+volumes:
+  mongo_data:
+    driver: local
